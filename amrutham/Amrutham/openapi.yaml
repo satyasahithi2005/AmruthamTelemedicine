@@ -1,0 +1,221 @@
+openapi: 3.1.0
+info:
+  title: Armutam Telemedicine API
+  version: 1.0.0
+  description: Node.js REST API for patient, doctor, appointment, prescription, and admin workflows.
+servers:
+  - url: http://localhost:3000
+security:
+  - bearerAuth: []
+paths:
+  /health/live:
+    get:
+      security: []
+      responses:
+        "200": { description: Process is running }
+  /health/ready:
+    get:
+      security: []
+      responses:
+        "200": { description: PostgreSQL is ready }
+        "503": { description: Dependency unavailable }
+  /auth/register:
+    post:
+      security: []
+      summary: Register patient account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegisterRequest" }
+      responses:
+        "201": { description: Patient account created }
+        "409": { description: Email already registered }
+  /auth/login:
+    post:
+      security: []
+      summary: Authenticate and issue short-lived bearer token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoginRequest" }
+      responses:
+        "200": { description: Authenticated }
+        "401": { description: Invalid credentials or MFA code }
+  /users/me:
+    get:
+      summary: Get current user profile
+      responses:
+        "200": { description: Current user }
+  /users/me/mfa/setup:
+    post:
+      summary: Begin authenticator-app MFA setup (password re-authentication required)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MfaSetupRequest" }
+      responses:
+        "200": { description: TOTP provisioning URI }
+  /users/me/mfa/enable:
+    post:
+      summary: Confirm and enable MFA
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MfaEnableRequest" }
+      responses:
+        "204": { description: MFA enabled }
+  /admin/doctors:
+    post:
+      summary: Admin provisions a doctor profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DoctorRequest" }
+      responses:
+        "201": { description: Doctor provisioned }
+        "403": { description: Admin role required }
+  /doctors:
+    get:
+      security: []
+      summary: Search public doctor directory
+      parameters:
+        - { name: specialization, in: query, schema: { type: string, maxLength: 120 } }
+        - { name: location, in: query, schema: { type: string, maxLength: 160 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0 } }
+      responses:
+        "200": { description: Matching doctors }
+  /appointments:
+    get:
+      summary: List appointments scoped to the caller's role and identity
+      responses:
+        "200": { description: Appointment page }
+    post:
+      summary: Book a consultation (patient only; transactional and idempotent)
+      parameters:
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 16, maxLength: 128 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AppointmentRequest" }
+      responses:
+        "201": { description: Consultation booked }
+        "409": { description: Doctor unavailable or key reused with changed request }
+  /appointments/{id}/status:
+    patch:
+      summary: Transition appointment state with role and ownership checks
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AppointmentStatusRequest" }
+      responses:
+        "200": { description: Updated appointment }
+        "409": { description: Invalid state transition }
+  /prescriptions:
+    get:
+      summary: List prescriptions scoped to caller
+      responses:
+        "200": { description: Prescription page }
+    post:
+      summary: Doctor creates a prescription for a completed consultation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PrescriptionRequest" }
+      responses:
+        "201": { description: Prescription created }
+        "409": { description: Consultation is not complete }
+  /admin/analytics/appointments:
+    get:
+      summary: Appointment counts by status for an admin-specified date range
+      parameters:
+        - { name: start, in: query, required: true, schema: { type: string, format: date-time } }
+        - { name: end, in: query, required: true, schema: { type: string, format: date-time } }
+      responses:
+        "200": { description: Counts by appointment status }
+        "403": { description: Admin role required }
+  /admin/audit-logs:
+    get:
+      summary: Admin audit trail query
+      parameters:
+        - { name: start, in: query, schema: { type: string, format: date-time } }
+        - { name: end, in: query, schema: { type: string, format: date-time } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0 } }
+      responses:
+        "200": { description: Audit log page }
+        "403": { description: Admin role required }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    RegisterRequest:
+      type: object
+      required: [email, password, fullName]
+      properties:
+        email: { type: string, format: email, maxLength: 320 }
+        password: { type: string, minLength: 12, maxLength: 128 }
+        fullName: { type: string, minLength: 1, maxLength: 160 }
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string }
+        totpCode: { type: string, pattern: "^[0-9]{6}$" }
+    DoctorRequest:
+      type: object
+      required: [email, password, fullName, specialization, location]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 12, maxLength: 128 }
+        fullName: { type: string, maxLength: 160 }
+        specialization: { type: string, maxLength: 120 }
+        location: { type: string, maxLength: 160 }
+        bio: { type: string, maxLength: 2000 }
+    AppointmentRequest:
+      type: object
+      required: [doctorId, startsAt, endsAt, reason]
+      properties:
+        doctorId: { type: string, format: uuid }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        reason: { type: string, maxLength: 500 }
+    AppointmentStatusRequest:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [scheduled, confirmed, in_progress, completed, cancelled, no_show]
+    PrescriptionRequest:
+      type: object
+      required: [appointmentId, medication, dosage]
+      properties:
+        appointmentId: { type: string, format: uuid }
+        medication: { type: string, maxLength: 200 }
+        dosage: { type: string, maxLength: 160 }
+        instructions: { type: string, maxLength: 1000 }
+    MfaSetupRequest:
+      type: object
+      required: [password]
+      properties:
+        password: { type: string }
+    MfaEnableRequest:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string, pattern: "^[0-9]{6}$" }
